@@ -54,7 +54,7 @@ npm run check     # typecheck + lint + format 检查 + build + verify
 | `build`                   | 产出 `lib/index.js` 与 `lib/client.js`。     |
 | `verify`                  | 加载构建出的客户端半，并用真实渲染器渲染它。 |
 | `typecheck`               | `tsc --noEmit`。                             |
-| `lint` / `lint:fix`       | ESLint（flat config）。                      |
+| `lint` / `lint:fix`       | Oxlint（开类型感知与 React hooks 规则）。    |
 | `format` / `format:check` | Prettier。                                   |
 | `check`                   | 以上全部，按 CI 的顺序执行。                 |
 

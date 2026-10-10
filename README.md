@@ -75,7 +75,7 @@ npm run check     # typecheck + lint + format check + build + verify
 | `build`                   | Emits `lib/index.js` and `lib/client.js`.                        |
 | `verify`                  | Loads the built Client half and renders it with a real renderer. |
 | `typecheck`               | `tsc --noEmit`.                                                  |
-| `lint` / `lint:fix`       | ESLint, flat config.                                             |
+| `lint` / `lint:fix`       | Oxlint, type-aware, with the React hooks rules.                  |
 | `format` / `format:check` | Prettier.                                                        |
 | `check`                   | Everything above, in the order CI would run it.                  |
 

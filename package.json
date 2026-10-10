@@ -32,26 +32,22 @@
     "build": "node scripts/clean.mjs && tsdown && node scripts/wrap-client.mjs",
     "verify": "node scripts/verify-client.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run build && npm run verify",
     "prepare": "npm run build"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@types/react": "~18.3.1",
-    "eslint": "^10.12.0",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "globals": "^17.13.0",
+    "oxlint": "^1.76.0",
+    "oxlint-tsgolint": "^7.0.2001",
     "prettier": "^3.9.10",
     "react": "^18.3.1",
     "react-test-renderer": "18.3.1",
     "tsdown": "^0.23.0",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "^8.71.1"
+    "typescript": "^6.0.3"
   },
   "dsh": {
     "bundle": {

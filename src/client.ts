@@ -91,7 +91,7 @@ interface WorkspaceActivityProps {
 
 /** Escape a group key for a double-quoted CSS attribute selector. */
 function quote(value: string): string {
-  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 interface Activity {
@@ -239,8 +239,13 @@ interface SlotsService {
   register: (options: Record<string, unknown>, component: unknown) => void;
 }
 
+/** The services this entry reads by name. Absent ones are simply undefined. */
+interface Services {
+  locale: LocaleService;
+}
+
 interface ClientContext {
-  get: (name: string) => unknown;
+  get: <K extends keyof Services>(name: K) => Services[K] | undefined;
   effect: (callback: () => unknown, label?: string) => void;
   slots: SlotsService;
 }
@@ -250,7 +255,7 @@ export const inject = ['slots'];
 export function apply(ctx: ClientContext): void {
   // The locale face is optional at registration: without it the entry still
   // renders, falling back to the message keys.
-  const locale = ctx.get('locale') as LocaleService | undefined;
+  const locale = ctx.get('locale');
   const hasLocale = locale !== undefined;
   if (locale !== undefined) {
     ctx.effect(() => locale.register(NS, { zh, en }), `${PKG}: dictionaries`);
