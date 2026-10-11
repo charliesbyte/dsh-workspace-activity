@@ -36,7 +36,8 @@ type Messages = Record<string, string>;
 
 const zh: Messages = {
   'activity.running': '{n} 个会话正在运行',
-  'activity.tooltip': '{n} 个会话正在运行：{names}',
+  'activity.finished': '{n} 个会话已完成',
+  'activity.tooltip': '{summary}：{names}',
   'activity.more': '等 {n} 个',
   'activity.separator': '、',
   'activity.unnamed': '未分组',
@@ -44,7 +45,8 @@ const zh: Messages = {
 
 const en: Messages = {
   'activity.running': '{n} sessions running',
-  'activity.tooltip': '{n} sessions running: {names}',
+  'activity.finished': '{n} sessions finished',
+  'activity.tooltip': '{summary}: {names}',
   'activity.more': 'and {n} more',
   'activity.separator': ', ',
   'activity.unnamed': 'Ungrouped',
@@ -65,6 +67,7 @@ interface SessionRow {
 /** The subset of the session-status feed this indicator needs. */
 interface SessionStatus {
   running?: boolean;
+  completionUnread?: boolean;
 }
 
 interface StatusFeed {
@@ -94,20 +97,38 @@ function quote(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+/** One workspace's session tally, accumulated before the two states are split. */
+interface GroupActivity {
+  title: string;
+  running: number;
+  done: number;
+}
+
 interface Activity {
-  sessions: number;
-  groups: Map<string, string>;
+  /** Group keys with a running session, sorted. */
+  running: readonly string[];
+  /** Group keys whose sessions all stopped with the completion mark unread, sorted. */
+  done: readonly string[];
+  runningSessions: number;
+  doneSessions: number;
+  /** Display title per group key, for every key in either list. */
+  titles: ReadonlyMap<string, string>;
 }
 
 /**
- * Which workspace groups own a running session, and how many sessions run.
+ * Which workspace groups own a running or a just-finished session.
  *
  * The status feed is authoritative where it names a session; the session list is
  * the fallback, matching the workspace browser's own precedence so this
  * indicator can never disagree with a session row's spinner. Archived sessions
  * are skipped: the browser hides them and publishes the set as an array of ids.
+ *
+ * A session that stopped without the browser clearing its unread mark stays
+ * counted, which is what keeps a finished workspace visible instead of letting
+ * its row fall silent. A group that is running reports only that: the spinner
+ * already says it is busy.
  */
-function runningGroups(
+function workspaceActivity(
   items: readonly WorkspaceRow[] | undefined,
   byId: Readonly<Record<string, SessionRow | undefined>> | undefined,
   statuses: StatusFeed | undefined,
@@ -118,19 +139,46 @@ function runningGroups(
     for (const id of workspace.sessionIds ?? []) ownerOf.set(id, workspace);
   }
   const hidden = new Set(archived ?? []);
-  const groups = new Map<string, string>();
-  let sessions = 0;
+  const groups = new Map<string, GroupActivity>();
   for (const id of Object.keys(byId ?? {})) {
     if (hidden.has(id)) continue;
-    const running = statuses?.get?.(id)?.running ?? byId?.[id]?.running;
-    if (running !== true) continue;
-    sessions += 1;
+    const status = statuses?.get?.(id);
+    const isRunning = status?.running ?? byId?.[id]?.running;
+    const isDone = isRunning !== true && status?.completionUnread === true;
+    if (isRunning !== true && !isDone) continue;
     const workspace = ownerOf.get(id);
     const key = workspace?.workspaceId ?? '';
-    if (groups.has(key)) continue;
-    groups.set(key, workspace?.title ?? '');
+    const current = groups.get(key);
+    if (current === undefined) {
+      groups.set(key, {
+        title: workspace?.title ?? '',
+        running: isRunning === true ? 1 : 0,
+        done: isRunning === true ? 0 : 1,
+      });
+    } else if (isRunning === true) current.running += 1;
+    else current.done += 1;
   }
-  return { sessions, groups };
+
+  const running: string[] = [];
+  const done: string[] = [];
+  const titles = new Map<string, string>();
+  let runningSessions = 0;
+  let doneSessions = 0;
+  for (const [key, group] of groups) {
+    titles.set(key, group.title);
+    if (group.running > 0) {
+      running.push(key);
+      runningSessions += group.running;
+      continue;
+    }
+    if (group.done > 0) {
+      done.push(key);
+      doneSessions += group.done;
+    }
+  }
+  running.sort();
+  done.sort();
+  return { running, done, runningSessions, doneSessions, titles };
 }
 
 /**
@@ -146,43 +194,65 @@ const RING =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9.5' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-opacity='.25'/%3E%3Ccircle cx='12' cy='12' r='9.5' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-dasharray='12,150'/%3E%3C/svg%3E\")";
 
 /**
- * The group rows that own a running session, decorated in place.
+ * The finished mark: the product's own `done` dot, a 6px core centred in the
+ * 10px slot the solid states reserve. It takes the ring's place once the
+ * sessions stop, so the row keeps saying something instead of going quiet.
  *
- * The ring is the row's trailing pseudo element, so it lands at the empty
+ * The state behind it is the browser's unread completion mark, which it clears
+ * when you open the session — so the dot reads as "finished and not looked at
+ * yet", the same thing the session row's own green dot means.
+ */
+const DONE_DOT = [
+  'content:"";flex:none;box-sizing:border-box;width:6px;height:6px;margin:0 2px;',
+  'border-radius:50%;background:var(--dsw-alias-state-success-primary)',
+].join('');
+
+/**
+ * The group rows that own a running or just-finished session, decorated in place.
+ *
+ * The mark is the row's trailing pseudo element, so it lands at the empty
  * right-hand end — the same place a session row puts its timestamp — while the
  * growing title column keeps it pinned there. Nothing is hidden or displaced.
  */
-function rowCss(groups: Map<string, string>): string {
-  if (groups.size === 0) return '';
-  const rows = [...groups.keys()].sort().map((key) => `[data-row-key="workspace:${quote(key)}"]`);
+function rowCss(activity: Activity): string {
   // Every rule repeats the whole selector list. A comma-joined list applies the
   // trailing combinator to its last member only, so sharing one prefix would
   // leave every group but one undecorated once two workspaces run at once.
-  const each = (suffix: string): string => rows.map((row) => row + suffix).join(',');
-  const ring = each('::after');
-  // A collapsed row hides its sessions, so the folder glyph has to carry the
-  // state alone. It takes the same blue the browser paints on the folder of the
-  // group you are inside. An expanded row already shows its sessions, so it
-  // keeps the browser's own colouring rather than a second meaning for the same
-  // colour.
-  const folded = each('[aria-expanded="false"]>span:first-child');
-  return [
-    '@keyframes dswa-spin{to{transform:rotate(360deg)}}',
-    `${folded}{color:var(--dsw-alias-state-business-primary)}`,
-    `${ring}{content:"";flex:none;box-sizing:border-box;width:14px;height:14px;`,
-    'background-color:var(--dsw-alias-label-tertiary);',
-    `-webkit-mask-image:${RING};mask-image:${RING};`,
-    '-webkit-mask-size:100% 100%;mask-size:100% 100%;',
-    '-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;',
-    'animation:dswa-spin 1.5s linear infinite}',
-    '@media (prefers-reduced-motion:reduce){',
-    `${ring}{animation:none;opacity:.45}}`,
-  ].join('');
+  const rows = (keys: readonly string[], suffix: string): string =>
+    keys.map((key) => `[data-row-key="workspace:${quote(key)}"]${suffix}`).join(',');
+  const parts: string[] = [];
+
+  if (activity.running.length > 0) {
+    const ring = rows(activity.running, '::after');
+    // A collapsed row hides its sessions, so the folder glyph has to carry the
+    // state alone. It takes the same blue the browser paints on the folder of the
+    // group you are inside. An expanded row already shows its sessions, so it
+    // keeps the browser's own colouring rather than a second meaning for the same
+    // colour.
+    const folded = rows(activity.running, '[aria-expanded="false"]>span:first-child');
+    parts.push(
+      '@keyframes dswa-spin{to{transform:rotate(360deg)}}',
+      `${folded}{color:var(--dsw-alias-state-business-primary)}`,
+      `${ring}{content:"";flex:none;box-sizing:border-box;width:14px;height:14px;`,
+      'background-color:var(--dsw-alias-label-tertiary);',
+      `-webkit-mask-image:${RING};mask-image:${RING};`,
+      '-webkit-mask-size:100% 100%;mask-size:100% 100%;',
+      '-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;',
+      'animation:dswa-spin 1.5s linear infinite}',
+      `@media (prefers-reduced-motion:reduce){${ring}{animation:none;opacity:.45}}`,
+    );
+  }
+
+  if (activity.done.length > 0) {
+    parts.push(`${rows(activity.done, '::after')}{${DONE_DOT}}`);
+  }
+
+  return parts.join('');
 }
 
 /**
  * The slot entry. It shows no control of its own: it publishes the row rules,
- * plus a description of the same state for readers who cannot see the ring.
+ * plus a description of the same state for readers who cannot see the mark.
  */
 function WorkspaceActivity({
   useWorkspaces,
@@ -195,10 +265,10 @@ function WorkspaceActivity({
   const statuses = useSessionStatus((state: StatusFeed) => state);
   const archived = useWorkspaces((state: WorkspaceListState) => state.archivedSessionIds);
   const activity = useMemo(
-    () => runningGroups(items, byId, statuses, archived),
+    () => workspaceActivity(items, byId, statuses, archived),
     [items, byId, statuses, archived],
   );
-  if (activity.sessions === 0) return null;
+  if (activity.running.length === 0 && activity.done.length === 0) return null;
 
   const tr = (key: string, params?: Record<string, unknown>): string => {
     if (typeof t !== 'function') return key;
@@ -207,23 +277,31 @@ function WorkspaceActivity({
   };
   const unnamed = tr('activity.unnamed');
   const separator = tr('activity.separator');
-  const named = [...activity.groups.values()].map((title) => (title === '' ? unnamed : title));
+  const named = [...activity.running, ...activity.done].map((key) => {
+    const title = activity.titles.get(key) ?? '';
+    return title === '' ? unnamed : title;
+  });
   const listed = named.slice(0, MAX_NAMES);
   const rest = named.length - listed.length;
   const parts = listed.slice();
   if (rest > 0) parts.push(tr('activity.more', { n: rest }));
-  const label = tr('activity.running', { n: activity.sessions });
-  const description = tr('activity.tooltip', {
-    n: activity.sessions,
-    names: parts.join(separator),
-  });
+
+  const clauses: string[] = [];
+  if (activity.runningSessions > 0) {
+    clauses.push(tr('activity.running', { n: activity.runningSessions }));
+  }
+  if (activity.doneSessions > 0) {
+    clauses.push(tr('activity.finished', { n: activity.doneSessions }));
+  }
+  const summary = clauses.join(separator);
+  const description = tr('activity.tooltip', { summary, names: parts.join(separator) });
 
   return createElement(
     Fragment,
     null,
-    createElement('style', { 'data-plugin-css': STYLE_ID }, BASE_CSS + rowCss(activity.groups)),
+    createElement('style', { 'data-plugin-css': STYLE_ID }, BASE_CSS + rowCss(activity)),
     createElement('span', { className: 'dswa-sr' }, description),
-    createElement('span', { className: 'dswa-sr' }, label),
+    createElement('span', { className: 'dswa-sr' }, summary),
   );
 }
 

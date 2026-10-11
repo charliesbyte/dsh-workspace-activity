@@ -76,7 +76,8 @@ if (registered.options.locale !== 'workspace-activity') {
 /** The English dictionary, so assertions can read the strings a user would see. */
 const DICT = {
   'activity.running': '{n} sessions running',
-  'activity.tooltip': '{n} sessions running: {names}',
+  'activity.finished': '{n} sessions finished',
+  'activity.tooltip': '{summary}: {names}',
   'activity.more': 'and {n} more',
   'activity.separator': ', ',
   'activity.unnamed': 'Ungrouped',
@@ -89,12 +90,12 @@ const t = (key, params) => {
 };
 
 /** Render the entry against one fixed snapshot of the three feeds. */
-function render({ items, byId, statuses }) {
+function render({ items, byId, statuses, archived = [] }) {
   let tree;
   TestRenderer.act(() => {
     tree = TestRenderer.create(
       createElement(registered.component, {
-        useWorkspaces: (selector) => selector({ items, archivedSessionIds: [] }),
+        useWorkspaces: (selector) => selector({ items, archivedSessionIds: archived }),
         useSessions: (selector) => selector({ byId }),
         useSessionStatus: (selector) => selector(statuses),
         t,
@@ -109,14 +110,21 @@ const live = render({
     { workspaceId: 'C:\\a', title: 'alpha', sessionIds: ['s1'] },
     { workspaceId: 'C:\\b', title: 'beta', sessionIds: ['s2'] },
     { workspaceId: 'C:\\c', title: 'gamma', sessionIds: ['s3'] },
+    { workspaceId: 'C:\\d', title: 'delta', sessionIds: ['s4'] },
   ],
-  byId: { s1: { running: true }, s2: { running: false }, s3: { running: true } },
-  // The status feed wins where it names a session, so beta runs even though the
-  // session list says otherwise, and gamma is idle despite the list saying it runs.
+  byId: {
+    s1: { running: true },
+    s2: { running: false },
+    s3: { running: false },
+    s4: { running: false },
+  },
+  // The status feed wins where it names a session: beta runs even though the
+  // session list says otherwise, gamma has finished unread, and delta is idle.
   statuses: new Map([
     ['s1', { running: true }],
     ['s2', { running: true }],
-    ['s3', { running: false }],
+    ['s3', { running: false, completionUnread: true }],
+    ['s4', { running: false, completionUnread: false }],
   ]),
 });
 
@@ -126,32 +134,48 @@ console.log('--- CSS ---');
 console.log(css);
 console.log('--- checks ---');
 
-for (const selector of [
-  '[data-row-key="workspace:C:\\\\a"]::after',
-  '[data-row-key="workspace:C:\\\\b"]::after',
-]) {
-  if (!css.includes(selector)) throw new Error(`missing rule for ${selector}`);
+// Running workspaces keep the spinning ring, and both of them carry every rule.
+for (const key of ['C:\\\\a', 'C:\\\\b']) {
+  const selector = `[data-row-key="workspace:${key}"]::after`;
+  if (!css.includes(selector)) throw new Error(`missing ring rule for ${selector}`);
 }
-if (css.includes('workspace:C:\\\\c')) {
-  throw new Error('the status feed did not override the session list');
-}
-
 const foldedCount = (css.match(/aria-expanded="false"\]>span:first-child\{/g) ?? []).length;
 if (foldedCount !== 1) throw new Error(`expected 1 folded rule, got ${foldedCount}`);
-
-// Every rule that names one live workspace must name all of them: a comma-joined
-// selector list applies its trailing combinator to the last member only.
 for (const rule of css.split(/(?<=})/)) {
   if (!rule.includes('workspace:C:\\\\a')) continue;
   if (!rule.includes('workspace:C:\\\\b')) throw new Error(`rule lost a selector: ${rule}`);
 }
 
+// A finished workspace keeps a static success dot instead of going quiet.
+const doneSelector = '[data-row-key="workspace:C:\\\\c"]::after';
+if (!css.includes(doneSelector)) throw new Error(`missing finished rule for ${doneSelector}`);
+if (!css.includes('--dsw-alias-state-success-primary'))
+  throw new Error('finished mark lost its colour');
+const doneRule = css.split(/(?<=})/).find((rule) => rule.startsWith(doneSelector));
+if (doneRule === undefined) throw new Error('finished rule is not the first selector in its rule');
+if (doneRule.includes('animation')) throw new Error('finished mark must not animate');
+
+// An idle workspace is left alone entirely.
+if (css.includes('workspace:C:\\\\d')) throw new Error('an idle workspace was decorated');
+
 const text = live.root.findAllByType('span').map((node) => node.props.children);
-const label = text.find((value) => typeof value === 'string' && value.includes('sessions running'));
-if (label === undefined) throw new Error('the description was not published for readers');
+const label = text.find(
+  (value) => typeof value === 'string' && value.includes('sessions finished'),
+);
+if (label === undefined) throw new Error('the description did not mention the finished sessions');
 
 const idle = render({ items: [], byId: {}, statuses: new Map() });
-if (idle.toJSON() !== null) throw new Error('the entry rendered while nothing was running');
+if (idle.toJSON() !== null)
+  throw new Error('the entry rendered while nothing was running or finished');
+
+// Archived sessions are the browser's to hide, so they never reach the rules.
+const archived = render({
+  items: [{ workspaceId: 'C:\\a', title: 'alpha', sessionIds: ['s1'] }],
+  byId: { s1: { running: true } },
+  statuses: new Map([['s1', { running: true }]]),
+  archived: ['s1'],
+});
+if (archived.toJSON() !== null) throw new Error('an archived session was still counted');
 
 console.log('folded rules:', foldedCount);
 console.log('description:', label);
