@@ -62,7 +62,9 @@ selector degrades to "no indicator", not to a broken sidebar.
 ## Development
 
 Written in TypeScript; `src/` is the source of truth and `lib/` is generated
-(and committed — see below).
+(and committed — see below). The scripts under `scripts/` are TypeScript too and
+run straight through Node's type stripping, which needs Node 22.18 or newer; no
+separate runner is involved.
 
 ```sh
 npm install
@@ -79,7 +81,7 @@ npm run check     # typecheck + lint + format check + build + verify
 | `format` / `format:check` | Prettier.                                                        |
 | `check`                   | Everything above, in the order CI would run it.                  |
 
-`build` runs `scripts/wrap-client.mjs` after tsdown: the Client half has to
+`build` runs `scripts/wrap-client.ts` after tsdown: the Client half has to
 reach the browser as a `window.__ModuleLoader__.load({ id, factory })` call
 whose `id` is the package name, and the wrapper supplies that envelope.
 

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { createElement } from 'react';
-import TestRenderer from 'react-test-renderer';
+import { createElement, type ComponentType, type ReactElement } from 'react';
+import TestRenderer, { type ReactTestRenderer } from 'react-test-renderer';
 
 /**
  * Renders the built Client bundle the way the browser module table does: capture
@@ -11,14 +11,54 @@ import TestRenderer from 'react-test-renderer';
  * the registration, and the CSS the entry publishes — not the running sidebar.
  */
 
-let captured;
-globalThis.window = {
-  __ModuleLoader__: {
-    load(registration) {
-      captured = registration;
+interface Registration {
+  id: string;
+  factory: (require: (specifier: string) => unknown) => ClientModule;
+}
+
+interface ClientModule {
+  inject: string[];
+  apply: (ctx: unknown) => void;
+}
+
+interface WorkspaceItem {
+  workspaceId: string;
+  title: string;
+  sessionIds: string[];
+}
+
+interface SessionRow {
+  running: boolean;
+  updatedAt?: number;
+}
+
+interface SessionStatus {
+  running: boolean;
+  completionUnread?: boolean;
+}
+
+interface Props {
+  now?: number;
+  items: WorkspaceItem[];
+  byId: Record<string, SessionRow>;
+  statuses: Map<string, SessionStatus>;
+  archived?: string[];
+}
+
+let captured: Registration | undefined;
+
+// The bundle reads the module table off the global scope, which the DOM lib has
+// already declared. Assigning the host object through `Object.assign` reaches
+// that property without asserting anything about its shape.
+Object.assign(globalThis, {
+  window: {
+    __ModuleLoader__: {
+      load(registration: Registration) {
+        captured = registration;
+      },
     },
   },
-};
+});
 
 const require = createRequire(import.meta.url);
 const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
@@ -27,8 +67,9 @@ const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'
 if (captured?.id !== 'dsh-workspace-activity') {
   throw new Error(`envelope id mismatch: ${captured?.id}`);
 }
+const registration = captured;
 
-const mod = captured.factory((specifier) => {
+const mod = registration.factory((specifier) => {
   if (specifier === 'react') return require('react');
   throw new Error(`unexpected require: ${specifier}`);
 });
@@ -37,27 +78,37 @@ if (!Array.isArray(mod.inject) || typeof mod.apply !== 'function') {
   throw new Error('bundle did not export inject/apply');
 }
 
-let registered;
-const localeCalls = [];
+interface RegisteredOptions {
+  name: string;
+  locale?: string;
+}
+
+interface Registered {
+  options: RegisteredOptions;
+  component: ComponentType<Record<string, unknown>>;
+}
+
+let registered: Registered | undefined;
+const localeCalls: { ns: string; dicts: unknown }[] = [];
 const ctx = {
-  get: (name) =>
+  get: (name: string): unknown =>
     name === 'locale'
       ? {
-          register: (ns, dicts) => {
+          register: (ns: string, dicts: unknown) => {
             localeCalls.push({ ns, dicts });
             return () => {};
           },
         }
       : undefined,
-  effect: (callback) => {
+  effect: (callback: () => void): void => {
     callback();
   },
   slots: {
-    inject: (key, callback) => {
+    inject: (key: string, callback: () => void): void => {
       if (key !== 'sidebar.footer.action') throw new Error(`injected ${key}`);
       callback();
     },
-    register: (options, component) => {
+    register: (options: RegisteredOptions, component: ComponentType<Record<string, unknown>>) => {
       registered = { options, component };
     },
   },
@@ -65,16 +116,18 @@ const ctx = {
 
 mod.apply(ctx);
 
-if (registered?.options?.name !== 'sidebar.footer.action') {
+if (registered === undefined) throw new Error('the entry registered nothing');
+const entry = registered;
+if (entry.options.name !== 'sidebar.footer.action') {
   throw new Error('entry did not register against the footer slot');
 }
 if (localeCalls.length !== 1) throw new Error('locale was not registered once');
-if (registered.options.locale !== 'workspace-activity') {
+if (entry.options.locale !== 'workspace-activity') {
   throw new Error('entry did not declare its locale namespace');
 }
 
 /** The English dictionary, so assertions can read the strings a user would see. */
-const DICT = {
+const DICT: Record<string, string> = {
   'activity.running': '{n} sessions running',
   'activity.finished': '{n} sessions finished',
   'activity.tooltip': '{summary}: {names}',
@@ -83,10 +136,16 @@ const DICT = {
   'activity.unnamed': 'Ungrouped',
 };
 
-const t = (key, params) => {
+/** Interpolate one dictionary entry the way the locale service does. */
+const t = (key: string, params?: Record<string, unknown>): string => {
   const template = DICT[key];
   if (template === undefined) return key;
-  return template.replace(/\{(\w+)\}/g, (_, name) => String(params?.[name] ?? `{${name}}`));
+  return template.replace(/\{(\w+)\}/g, (_, name: string) => {
+    const value: unknown = params?.[name];
+    if (value === undefined || value === null) return `{${name}}`;
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    throw new Error(`t(${key}): {${name}} is not a string or number`);
+  });
 };
 
 // The entry reads its own clock, so the test owns the clock. Nothing else in the
@@ -97,29 +156,32 @@ let clock = T;
 Date.now = () => clock;
 
 /** A CSS selector for one workspace row's mark, with the escaping `quote` applies. */
-const mark = (id) => `[data-row-key="workspace:${id.replace(/\\/g, '\\\\')}"]::after`;
+const mark = (id: string): string =>
+  `[data-row-key="workspace:${id.replace(/\\/g, '\\\\')}"]::after`;
 
-function element({ items, byId, statuses, archived = [] }) {
-  return createElement(registered.component, {
-    useWorkspaces: (selector) => selector({ items, archivedSessionIds: archived }),
-    useSessions: (selector) => selector({ byId }),
-    useSessionStatus: (selector) => selector(statuses),
+function element({ items, byId, statuses, archived = [] }: Props): ReactElement {
+  return createElement(entry.component, {
+    useWorkspaces: (selector: (state: unknown) => unknown) =>
+      selector({ items, archivedSessionIds: archived }),
+    useSessions: (selector: (state: unknown) => unknown) => selector({ byId }),
+    useSessionStatus: (selector: (state: unknown) => unknown) => selector(statuses),
     t,
   });
 }
 
 /** Render the entry against one snapshot of the three feeds, at the given time. */
-function render(props) {
+function render(props: Props): ReactTestRenderer {
   if (props.now !== undefined) clock = props.now;
-  let tree;
+  let tree: ReactTestRenderer | undefined;
   TestRenderer.act(() => {
     tree = TestRenderer.create(element(props));
   });
+  if (tree === undefined) throw new Error('the renderer produced no tree');
   return tree;
 }
 
 /** Re-render the same mounted entry, so its remembered state survives. */
-function update(tree, props) {
+function update(tree: ReactTestRenderer, props: Props): void {
   if (props.now !== undefined) clock = props.now;
   TestRenderer.act(() => {
     tree.update(element(props));
@@ -127,9 +189,12 @@ function update(tree, props) {
 }
 
 /** The published CSS, or an empty string when the entry rendered nothing at all. */
-const cssOf = (tree) => {
+const cssOf = (tree: ReactTestRenderer): string => {
   if (tree.toJSON() === null) return '';
-  return tree.root.findByType('style').props.children;
+  const style = tree.root.findByType('style');
+  const children: unknown = style.props.children;
+  if (typeof children !== 'string') throw new Error('the published stylesheet is not a string');
+  return children;
 };
 
 const live = render({
@@ -148,7 +213,7 @@ const live = render({
   },
   // The status feed wins where it names a session: beta runs even though the
   // session list says otherwise, gamma has finished unread, and delta is idle.
-  statuses: new Map([
+  statuses: new Map<string, SessionStatus>([
     ['s1', { running: true }],
     ['s2', { running: true }],
     ['s3', { running: false, completionUnread: true }],
@@ -185,9 +250,9 @@ if (doneRule.includes('animation')) throw new Error('finished mark must not anim
 // An idle workspace is left alone entirely.
 if (css.includes('workspace:C:\\\\d')) throw new Error('an idle workspace was decorated');
 
-const text = live.root.findAllByType('span').map((node) => node.props.children);
+const text: unknown[] = live.root.findAllByType('span').map((node): unknown => node.props.children);
 const label = text.find(
-  (value) => typeof value === 'string' && value.includes('sessions finished'),
+  (value): value is string => typeof value === 'string' && value.includes('sessions finished'),
 );
 if (label === undefined) throw new Error('the description did not mention the finished sessions');
 

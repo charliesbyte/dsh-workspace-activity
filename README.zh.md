@@ -41,7 +41,7 @@ dsh plugin --profile <name> add dsh-workspace-activity
 
 ## 开发
 
-代码用 TypeScript 写，`src/` 是唯一真源，`lib/` 是构建产物（同时提交进仓库，见下）。
+代码用 TypeScript 写，`src/` 是唯一真源，`lib/` 是构建产物（同时提交进仓库，见下）。`scripts/` 下的脚本同样是 TypeScript，直接靠 Node 的类型擦除运行，需要 Node 22.18 或更新版本，不引入额外的运行器。
 
 ```sh
 npm install
@@ -58,7 +58,7 @@ npm run check     # typecheck + lint + format 检查 + build + verify
 | `format` / `format:check` | Prettier。                                   |
 | `check`                   | 以上全部，按 CI 的顺序执行。                 |
 
-`build` 会在 tsdown 之后跑 `scripts/wrap-client.mjs`：客户端半必须以 `window.__ModuleLoader__.load({ id, factory })` 的形式到达浏览器，且 `id` 等于包名，这个信封由该脚本补上。
+`build` 会在 tsdown 之后跑 `scripts/wrap-client.ts`：客户端半必须以 `window.__ModuleLoader__.load({ id, factory })` 的形式到达浏览器，且 `id` 等于包名，这个信封由该脚本补上。
 
 `lib/` 是**特意提交进仓库**的。pnpm 默认不会运行 git 依赖的 `prepare` 脚本，除非使用者显式开 `allowBuilds`；提交构建产物才能让 `add` 直接从仓库装成功。`prepare` 同样会跑 `build`，保证本地 `npm install` 与 `npm publish` 时产物是最新的。
 

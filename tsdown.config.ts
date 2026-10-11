@@ -6,7 +6,7 @@ import { defineConfig } from 'tsdown';
  * The Host half is an ordinary ES module the Loader imports. The Client half is
  * not: the browser module table expects a lazy factory registered through
  * `window.__ModuleLoader__.load`, so it is emitted as CommonJS and wrapped into
- * that envelope by `scripts/wrap-client.mjs` after the bundle is written. React
+ * that envelope by `scripts/wrap-client.ts` after the bundle is written. React
  * and the platform packages stay external because the module table supplies them
  * at materialization time.
  */

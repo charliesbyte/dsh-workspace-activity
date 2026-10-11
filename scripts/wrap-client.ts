@@ -17,9 +17,18 @@ import { fileURLToPath } from 'node:url';
  * materializes the module.
  */
 
-const packageName = JSON.parse(
-  readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
-).name;
+/** Narrow a parsed manifest to the one field this script needs. */
+function readPackageName(value: unknown): string {
+  if (typeof value !== 'object' || value === null || !('name' in value)) {
+    throw new Error('wrap-client: package.json has no name');
+  }
+  const { name } = value;
+  if (typeof name !== 'string') throw new Error('wrap-client: package.json name is not a string');
+  return name;
+}
+
+const manifestPath = fileURLToPath(new URL('../package.json', import.meta.url));
+const packageName = readPackageName(JSON.parse(readFileSync(manifestPath, 'utf8')));
 
 const lib = fileURLToPath(new URL('../lib', import.meta.url));
 const source = ['client.cjs', 'client.js']

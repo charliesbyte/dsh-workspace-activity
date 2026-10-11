@@ -26,11 +26,11 @@
     "icon.svg"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18.0"
   },
   "scripts": {
-    "build": "node scripts/clean.mjs && tsdown && node scripts/wrap-client.mjs",
-    "verify": "node scripts/verify-client.mjs",
+    "build": "node scripts/clean.ts && tsdown && node scripts/wrap-client.ts",
+    "verify": "node scripts/verify-client.ts",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
@@ -40,7 +40,9 @@
     "prepare": "npm run build"
   },
   "devDependencies": {
+    "@types/node": "22.20.5",
     "@types/react": "~18.3.1",
+    "@types/react-test-renderer": "18.3.1",
     "oxlint": "^1.76.0",
     "oxlint-tsgolint": "^7.0.2001",
     "prettier": "^3.9.10",

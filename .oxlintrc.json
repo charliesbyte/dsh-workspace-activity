@@ -15,10 +15,10 @@
     "builtin": true,
     "es2024": true
   },
-  "ignorePatterns": ["lib/**", "node_modules/**", "package-lock.json", "**/*.mjs", "*.config.js"],
+  "ignorePatterns": ["lib/**", "node_modules/**", "package-lock.json", "*.config.js"],
   "overrides": [
     {
-      "files": ["src/**/*.ts"],
+      "files": ["src/**/*.ts", "scripts/**/*.ts", "*.config.ts"],
       "rules": {
         "no-var": "error",
         "prefer-const": "error",
