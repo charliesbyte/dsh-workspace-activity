@@ -1,4 +1,4 @@
-import { createElement, Fragment, useMemo } from 'react';
+import { createElement, Fragment, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 
 /**
@@ -21,6 +21,18 @@ const ENTRY_ID = 'workspace-activity';
 const STYLE_ID = `${PKG}/activity.css`;
 /** How many group names the hidden description lists before it summarizes the rest. */
 const MAX_NAMES = 4;
+
+/**
+ * How long a group keeps its finished mark.
+ *
+ * The browser's completion mark is unread-until-opened and never ages out, so
+ * publishing it unchanged on a folder row would leave a green dot on a workspace
+ * whose sessions stopped days ago — a folder row carries no timestamp of its own
+ * to contradict it. The mark here is a notice rather than a flag: it rides the
+ * session's own `updatedAt`, the field its row's timestamp already reads, and
+ * lapses once that timestamp stops reading in minutes.
+ */
+const FINISHED_WINDOW_MS = 60 * 60 * 1000;
 
 /**
  * The hidden description's own rule. The visible indicator carries no markup of
@@ -62,6 +74,8 @@ interface WorkspaceRow {
 /** The subset of a session row this indicator needs. */
 interface SessionRow {
   running?: boolean;
+  /** The row's own timestamp, in epoch milliseconds. */
+  updatedAt?: number;
 }
 
 /** The subset of the session-status feed this indicator needs. */
@@ -107,12 +121,89 @@ interface GroupActivity {
 interface Activity {
   /** Group keys with a running session, sorted. */
   running: readonly string[];
-  /** Group keys whose sessions all stopped with the completion mark unread, sorted. */
+  /** Group keys whose sessions all stopped recently with the completion mark unread, sorted. */
   done: readonly string[];
   runningSessions: number;
   doneSessions: number;
   /** Display title per group key, for every key in either list. */
   titles: ReadonlyMap<string, string>;
+}
+
+/**
+ * Whether a session's own timestamp is recent enough to still deserve a mark.
+ *
+ * A missing or zero timestamp cannot be corroborated, so it never earns one.
+ * Subagent rows carry a zero timestamp, and they have their parent's row to
+ * report through anyway.
+ */
+function isFresh(updatedAt: number | undefined, now: number): boolean {
+  if (updatedAt === undefined || updatedAt <= 0) return false;
+  return now - updatedAt <= FINISHED_WINDOW_MS;
+}
+
+/**
+ * What this mount has watched happen, keyed by session id.
+ *
+ * `running` holds every session seen running since the mount; `stoppedAt` holds
+ * the time a session was watched stop while still carrying the unread mark, and
+ * only for sessions that were first seen running. Together they let a mark
+ * expire on its own rather than wait for the browser to clear it.
+ */
+interface Watch {
+  running: Set<string>;
+  stoppedAt: Map<string, number>;
+}
+
+/**
+ * Advance the watch to this render, and drop what has aged out.
+ *
+ * A session seen stopped without ever being seen running is left out of
+ * `stoppedAt` on purpose: this mount cannot tell whether it stopped a minute or
+ * a week ago, so such a mark is judged by its own timestamp alone.
+ */
+function observeWatch(
+  byId: Readonly<Record<string, SessionRow | undefined>> | undefined,
+  statuses: StatusFeed | undefined,
+  watch: Watch,
+  now: number,
+): void {
+  for (const id of Object.keys(byId ?? {})) {
+    const status = statuses?.get?.(id);
+    const running = status?.running ?? byId?.[id]?.running;
+    if (running === true) {
+      watch.running.add(id);
+      watch.stoppedAt.delete(id);
+      continue;
+    }
+    if (status?.completionUnread !== true) {
+      watch.running.delete(id);
+      watch.stoppedAt.delete(id);
+      continue;
+    }
+    if (watch.running.has(id) && !watch.stoppedAt.has(id)) {
+      watch.stoppedAt.set(id, now);
+      continue;
+    }
+    const stoppedAt = watch.stoppedAt.get(id);
+    if (stoppedAt !== undefined && now - stoppedAt > FINISHED_WINDOW_MS) {
+      watch.running.delete(id);
+      watch.stoppedAt.delete(id);
+    }
+  }
+}
+
+/**
+ * Whether a finished session still deserves its mark.
+ *
+ * Two clocks can justify one. The session's own timestamp covers a session that
+ * stopped a moment ago, and is what a row's "刚刚" already reports. Watching it
+ * stop covers the case that timestamp cannot: it records when the last prompt
+ * was, so a session that ran for hours would otherwise never qualify.
+ */
+function isFinished(id: string, row: SessionRow | undefined, watch: Watch, now: number): boolean {
+  if (isFresh(row?.updatedAt, now)) return true;
+  const stoppedAt = watch.stoppedAt.get(id);
+  return stoppedAt !== undefined && now - stoppedAt <= FINISHED_WINDOW_MS;
 }
 
 /**
@@ -124,8 +215,9 @@ interface Activity {
  * are skipped: the browser hides them and publishes the set as an array of ids.
  *
  * A session that stopped without the browser clearing its unread mark stays
- * counted, which is what keeps a finished workspace visible instead of letting
- * its row fall silent. A group that is running reports only that: the spinner
+ * counted while its completion is still recent, which is what keeps a finished
+ * workspace visible instead of letting its row fall silent without leaving a
+ * mark behind for good. A group that is running reports only that: the spinner
  * already says it is busy.
  */
 function workspaceActivity(
@@ -133,18 +225,23 @@ function workspaceActivity(
   byId: Readonly<Record<string, SessionRow | undefined>> | undefined,
   statuses: StatusFeed | undefined,
   archived: readonly string[] | undefined,
+  now: number,
+  watch: Watch,
 ): Activity {
   const ownerOf = new Map<string, WorkspaceRow>();
   for (const workspace of items ?? []) {
     for (const id of workspace.sessionIds ?? []) ownerOf.set(id, workspace);
   }
   const hidden = new Set(archived ?? []);
+  observeWatch(byId, statuses, watch, now);
   const groups = new Map<string, GroupActivity>();
   for (const id of Object.keys(byId ?? {})) {
     if (hidden.has(id)) continue;
+    const row = byId?.[id];
     const status = statuses?.get?.(id);
-    const isRunning = status?.running ?? byId?.[id]?.running;
-    const isDone = isRunning !== true && status?.completionUnread === true;
+    const isRunning = status?.running ?? row?.running;
+    const isDone =
+      isRunning !== true && status?.completionUnread === true && isFinished(id, row, watch, now);
     if (isRunning !== true && !isDone) continue;
     const workspace = ownerOf.get(id);
     const key = workspace?.workspaceId ?? '';
@@ -264,9 +361,15 @@ function WorkspaceActivity({
   const byId = useSessions((state: SessionListState) => state.byId);
   const statuses = useSessionStatus((state: StatusFeed) => state);
   const archived = useWorkspaces((state: WorkspaceListState) => state.archivedSessionIds);
+  const watchRef = useRef<Watch | undefined>(undefined);
+  watchRef.current ??= { running: new Set<string>(), stoppedAt: new Map<string, number>() };
+  const watch = watchRef.current;
   const activity = useMemo(
-    () => workspaceActivity(items, byId, statuses, archived),
-    [items, byId, statuses, archived],
+    // The window is measured at render time, the same way the workspace browser
+    // reads its own clock: no timer, because any feed change re-renders anyway.
+    // Advancing the watch is idempotent, so a repeated render costs nothing.
+    () => workspaceActivity(items, byId, statuses, archived, Date.now(), watch),
+    [items, byId, statuses, archived, watch],
   );
   if (activity.running.length === 0 && activity.done.length === 0) return null;
 
