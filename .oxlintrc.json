@@ -15,7 +15,7 @@
     "builtin": true,
     "es2024": true
   },
-  "ignorePatterns": ["lib/**", "node_modules/**", "package-lock.json", "*.config.js"],
+  "ignorePatterns": ["lib/**", "node_modules/**", "package-lock.json"],
   "overrides": [
     {
       "files": ["src/**/*.ts", "scripts/**/*.ts", "*.config.ts"],
