@@ -76,6 +76,8 @@ interface SessionRow {
   running?: boolean;
   /** The row's own timestamp, in epoch milliseconds. */
   updatedAt?: number;
+  /** `"subagent"` on the child rows the sidebar folds into their parent. */
+  origin?: string;
 }
 
 /** The subset of the session-status feed this indicator needs. */
@@ -106,9 +108,27 @@ interface WorkspaceActivityProps {
   t?: (key: string, params?: Record<string, unknown>) => string | undefined;
 }
 
-/** Escape a group key for a double-quoted CSS attribute selector. */
+/**
+ * Escape a group key for a double-quoted CSS attribute selector.
+ *
+ * A control character has no literal form inside a CSS string: an unescaped
+ * newline ends the string token and the whole rule is dropped as invalid, so the
+ * row would lose its mark silently. Each one is written as a hex escape with a
+ * trailing space, which is what stops a following hex digit being absorbed.
+ *
+ * The keys the browser publishes are workspace UUIDs, so none of this is
+ * reachable today; it is here so the function is a correct string escaper rather
+ * than one that happens to work on UUIDs.
+ */
 function quote(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  let escaped = '';
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (char === '\\' || char === '"') escaped += `\\${char}`;
+    else if (code < 0x20 || code === 0x7f) escaped += `\\${code.toString(16)} `;
+    else escaped += char;
+  }
+  return escaped;
 }
 
 /** One workspace's session tally, accumulated before the two states are split. */
@@ -155,6 +175,19 @@ interface Watch {
 }
 
 /**
+ * Whether a session row is a subagent's.
+ *
+ * The sidebar folds these into their parent's row and never renders one of its
+ * own, so a mark derived from one would have nothing to agree with. It matters
+ * more than that here: subagent ids are not part of any workspace's
+ * `sessionIds`, so one stopping would otherwise be counted against the ungrouped
+ * bucket and light up a row it has nothing to do with.
+ */
+function isSubagent(row: SessionRow | undefined): boolean {
+  return row?.origin === 'subagent';
+}
+
+/**
  * Advance the watch to this render, and drop what has aged out.
  *
  * A session seen stopped without ever being seen running is left out of
@@ -168,8 +201,10 @@ function observeWatch(
   now: number,
 ): void {
   for (const id of Object.keys(byId ?? {})) {
+    const row = byId?.[id];
+    if (isSubagent(row)) continue;
     const status = statuses?.get?.(id);
-    const running = status?.running ?? byId?.[id]?.running;
+    const running = status?.running ?? row?.running;
     if (running === true) {
       watch.running.add(id);
       watch.stoppedAt.delete(id);
@@ -238,6 +273,7 @@ function workspaceActivity(
   for (const id of Object.keys(byId ?? {})) {
     if (hidden.has(id)) continue;
     const row = byId?.[id];
+    if (isSubagent(row)) continue;
     const status = statuses?.get?.(id);
     const isRunning = status?.running ?? row?.running;
     const isDone =

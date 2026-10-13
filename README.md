@@ -23,10 +23,18 @@ through the plugin market and any other bundle-aware client.
 ## What it does
 
 The sidebar shows no indicator on a workspace row today. The plugin derives one
-from the same status feed the session rows use, so the two can never disagree:
+from the same status feed the session rows use, so the two agree:
 
 - A workspace is marked when at least one of its sessions is running.
-- Sessions the sidebar hides as archived are skipped.
+- Subagent sessions are skipped. The sidebar folds them into their parent's row
+  and never draws one of its own, and their ids belong to no workspace, so a mark
+  from one would have no row to sit on.
+- Sessions the sidebar hides as archived are skipped. This matches the default
+  view. The sidebar's archive filter can also show archived sessions, and the
+  plugin cannot see which setting is active — it is not part of what
+  `@deepseek-ai/dsh-client-ui-workspace` exposes — so with the filter set to show
+  archived sessions, a running archived row can appear under an unmarked
+  workspace.
 - The status feed is authoritative; the session list is the fallback, matching
   the precedence the workspace browser itself uses.
 - The mark is a spinner at the row's trailing edge, in the same 16px slot the

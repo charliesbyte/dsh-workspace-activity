@@ -30,6 +30,7 @@ interface WorkspaceItem {
 interface SessionRow {
   running: boolean;
   updatedAt?: number;
+  origin?: string;
 }
 
 interface SessionStatus {
@@ -155,9 +156,36 @@ const HOUR = 60 * 60 * 1000;
 let clock = T;
 Date.now = () => clock;
 
-/** A CSS selector for one workspace row's mark, with the escaping `quote` applies. */
-const mark = (id: string): string =>
-  `[data-row-key="workspace:${id.replace(/\\/g, '\\\\')}"]::after`;
+// The checks below read the published selectors back instead of rebuilding them.
+// An expectation built by copying the encoder shares its blind spot: delete the
+// escaping and the assertion deletes it too. Decoding is the other direction, so
+// a wrong escape surfaces as a key that no longer matches the workspace it names.
+
+/** Undo CSS string escapes, the way a parser does when it reads the attribute value. */
+function unescapeCss(value: string): string {
+  return value.replace(
+    /\\(?:([0-9a-fA-F]{1,6})[ \t\n]?|([\s\S]))/g,
+    (_, hex: string | undefined, char: string | undefined) =>
+      hex === undefined ? String(char) : String.fromCodePoint(Number.parseInt(hex, 16)),
+  );
+}
+
+const ROW_ATTR = /\[data-row-key="((?:[^"\\]|\\.)*)"\]/g;
+
+/** Every workspace key the given stylesheet text targets. */
+function markedKeys(css: string): Set<string> {
+  const keys = new Set<string>();
+  for (const match of css.matchAll(ROW_ATTR)) {
+    const value = unescapeCss(match[1] ?? '');
+    if (value.startsWith('workspace:')) keys.add(value.slice('workspace:'.length));
+  }
+  return keys;
+}
+
+/** The still-escaped attribute values, so a raw control character can be spotted. */
+function rawKeys(css: string): string[] {
+  return [...css.matchAll(ROW_ATTR)].map((match) => match[1] ?? '');
+}
 
 function element({ items, byId, statuses, archived = [] }: Props): ReactElement {
   return createElement(entry.component, {
@@ -227,28 +255,28 @@ console.log(css);
 console.log('--- checks ---');
 
 // Running workspaces keep the spinning ring, and both of them carry every rule.
-for (const key of ['C:\\\\a', 'C:\\\\b']) {
-  const selector = `[data-row-key="workspace:${key}"]::after`;
-  if (!css.includes(selector)) throw new Error(`missing ring rule for ${selector}`);
+for (const key of ['C:\\a', 'C:\\b']) {
+  if (!markedKeys(css).has(key)) throw new Error(`missing ring rule for ${key}`);
 }
 const foldedCount = (css.match(/aria-expanded="false"\]>span:first-child\{/g) ?? []).length;
 if (foldedCount !== 1) throw new Error(`expected 1 folded rule, got ${foldedCount}`);
 for (const rule of css.split(/(?<=})/)) {
-  if (!rule.includes('workspace:C:\\\\a')) continue;
-  if (!rule.includes('workspace:C:\\\\b')) throw new Error(`rule lost a selector: ${rule}`);
+  if (!markedKeys(rule).has('C:\\a')) continue;
+  if (!markedKeys(rule).has('C:\\b')) throw new Error(`rule lost a selector: ${rule}`);
 }
 
 // A finished workspace keeps a static success dot instead of going quiet.
-const doneSelector = mark('C:\\c');
-if (!css.includes(doneSelector)) throw new Error(`missing finished rule for ${doneSelector}`);
+if (!markedKeys(css).has('C:\\c')) throw new Error('missing the finished rule for C:\\c');
 if (!css.includes('--dsw-alias-state-success-primary'))
   throw new Error('finished mark lost its colour');
-const doneRule = css.split(/(?<=})/).find((rule) => rule.startsWith(doneSelector));
-if (doneRule === undefined) throw new Error('finished rule is not the first selector in its rule');
+const doneRule = css.split(/(?<=})/).find((rule) => markedKeys(rule).has('C:\\c'));
+if (doneRule === undefined) throw new Error('the finished mark is in no rule of its own');
+if (markedKeys(doneRule).size !== 1)
+  throw new Error('the finished mark shared a rule with another row');
 if (doneRule.includes('animation')) throw new Error('finished mark must not animate');
 
 // An idle workspace is left alone entirely.
-if (css.includes('workspace:C:\\\\d')) throw new Error('an idle workspace was decorated');
+if (markedKeys(css).has('C:\\d')) throw new Error('an idle workspace was decorated');
 
 const text: unknown[] = live.root.findAllByType('span').map((node): unknown => node.props.children);
 const label = text.find(
@@ -278,7 +306,7 @@ const stale = render({
   byId: { s5: { running: false, updatedAt: T - 26 * HOUR } },
   statuses: new Map([['s5', { running: false, completionUnread: true }]]),
 });
-if (cssOf(stale).includes(mark('C:\\e')))
+if (markedKeys(cssOf(stale)).has('C:\\e'))
   throw new Error('a stale finished session still decorated its workspace');
 if (stale.toJSON() !== null) throw new Error('a stale finished session still rendered the entry');
 
@@ -290,7 +318,7 @@ const longRun = render({
   byId: { s6: { running: true, updatedAt: T - 3 * HOUR } },
   statuses: new Map([['s6', { running: true }]]),
 });
-if (!cssOf(longRun).includes(mark('C:\\f')))
+if (!markedKeys(cssOf(longRun)).has('C:\\f'))
   throw new Error('a long-running session lost its ring');
 update(longRun, {
   now: T + 1000,
@@ -298,7 +326,7 @@ update(longRun, {
   byId: { s6: { running: false, updatedAt: T - 3 * HOUR } },
   statuses: new Map([['s6', { running: false, completionUnread: true }]]),
 });
-if (!cssOf(longRun).includes(mark('C:\\f')))
+if (!markedKeys(cssOf(longRun)).has('C:\\f'))
   throw new Error('a session watched stopping was not marked finished');
 
 // ...and that watched mark lapses on its own once the window passes, which is
@@ -309,8 +337,99 @@ update(longRun, {
   byId: { s6: { running: false, updatedAt: T - 3 * HOUR } },
   statuses: new Map([['s6', { running: false, completionUnread: true }]]),
 });
-if (cssOf(longRun).includes(mark('C:\\f'))) throw new Error('a watched finished mark never lapsed');
+if (markedKeys(cssOf(longRun)).has('C:\\f'))
+  throw new Error('a watched finished mark never lapsed');
 if (longRun.toJSON() !== null) throw new Error('the entry stayed after every mark lapsed');
+
+// A subagent's row is folded into its parent's and never gets one of its own, and
+// its id is in no workspace's `sessionIds`, so it must not mark anything at all —
+// otherwise it lands in the ungrouped bucket and lights up a row it has nothing to
+// do with.
+const subagent = render({
+  now: T,
+  items: [{ workspaceId: 'C:\\g', title: 'eta', sessionIds: ['p1'] }],
+  byId: { p1: { running: false }, c1: { running: true, origin: 'subagent' } },
+  statuses: new Map<string, SessionStatus>([['c1', { running: true }]]),
+});
+if (markedKeys(cssOf(subagent)).has(''))
+  throw new Error('a running subagent marked the ungrouped bucket');
+update(subagent, {
+  now: T + 1000,
+  items: [{ workspaceId: 'C:\\g', title: 'eta', sessionIds: ['p1'] }],
+  byId: { p1: { running: false }, c1: { running: false, updatedAt: 0, origin: 'subagent' } },
+  statuses: new Map<string, SessionStatus>([
+    ['p1', { running: false, completionUnread: false }],
+    ['c1', { running: false, completionUnread: true }],
+  ]),
+});
+if (subagent.toJSON() !== null)
+  throw new Error('a stopped subagent marked the ungrouped bucket finished');
+
+// Nothing caps how many workspaces can be marked. The accessible description
+// names only the first few and folds the rest, which is what made a reader think
+// the limit was four; the rules themselves must still cover every row.
+const many = Array.from({ length: 7 }, (_, index) => ({
+  workspaceId: `w${index}`,
+  title: `w${index}`,
+  sessionIds: [`m${index}`],
+}));
+const manyRun = render({
+  now: T,
+  items: many,
+  byId: Object.fromEntries(many.map((_, index) => [`m${index}`, { running: true }])),
+  statuses: new Map<string, SessionStatus>(),
+});
+const manyKeys = markedKeys(cssOf(manyRun));
+for (const item of many) {
+  if (!manyKeys.has(item.workspaceId))
+    throw new Error(`workspace ${item.workspaceId} was dropped from the rules`);
+}
+if (manyKeys.size !== many.length)
+  throw new Error(`expected ${many.length} marked workspaces, got ${manyKeys.size}`);
+const folded = manyRun.root
+  .findAllByType('span')
+  .map((node): unknown => node.props.children)
+  .find((value): value is string => typeof value === 'string' && value.includes('and 3 more'));
+if (folded === undefined) throw new Error('the description did not fold the extra names');
+
+// Workspace keys are UUIDs, so the escaping is exercised with the shapes that
+// would break it: a quote, a backslash, a newline, a POSIX path, and the empty
+// key the ungrouped bucket uses.
+const odd: WorkspaceItem[] = [
+  { workspaceId: 'a"b', title: 'quote', sessionIds: ['q1'] },
+  { workspaceId: 'a\\b', title: 'backslash', sessionIds: ['q2'] },
+  { workspaceId: 'a\nb', title: 'newline', sessionIds: ['q3'] },
+  { workspaceId: '/home/me/proj', title: 'posix', sessionIds: ['q4'] },
+];
+const oddRun = render({
+  now: T,
+  items: odd,
+  byId: {
+    q1: { running: true },
+    q2: { running: true },
+    q3: { running: true },
+    q4: { running: true },
+  },
+  statuses: new Map<string, SessionStatus>(),
+});
+const oddCss = cssOf(oddRun);
+for (const item of odd) {
+  if (!markedKeys(oddCss).has(item.workspaceId))
+    throw new Error(`the key ${JSON.stringify(item.workspaceId)} did not survive escaping`);
+}
+// A CSS string cannot hold a raw control character: the token ends there and the
+// whole rule is dropped as invalid, so the mark would disappear without a trace.
+const hasControl = (value: string): boolean => {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+};
+for (const raw of rawKeys(oddCss)) {
+  if (hasControl(raw))
+    throw new Error(`an unescaped control character reached a selector: ${JSON.stringify(raw)}`);
+}
 
 console.log('folded rules:', foldedCount);
 console.log('description:', label);
