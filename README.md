@@ -95,11 +95,11 @@ npm run check     # typecheck + lint + format check + build + verify
 reach the browser as a `window.__ModuleLoader__.load({ id, factory })` call
 whose `id` is the package name, and the wrapper supplies that envelope.
 
-`lib/` is committed on purpose. pnpm refuses to run a git dependency's
-`prepare` script unless the consumer opts in with `allowBuilds`, so shipping the
-built files is what lets `add` work straight from the repository. `prepare` runs
-`build` as well, which keeps the committed output current on `npm install` and
-`npm publish`.
+`lib/` is committed on purpose, and this package deliberately declares no
+lifecycle script. pnpm refuses to install a git-hosted package that has one
+unless the consumer allowlists it, which would make the plugin uninstallable
+straight from the repository; with no script to run, `add` simply consumes the
+committed output. Run `npm run build` after changing `src/`.
 
 `verify` is not a mock of the sidebar. It captures the factory the envelope
 registers, drives `apply` against a stub context, and renders the registered

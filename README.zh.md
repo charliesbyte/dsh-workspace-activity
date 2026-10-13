@@ -63,7 +63,7 @@ npm run check     # typecheck + lint + format 检查 + build + verify
 
 `build` 会在 tsdown 之后跑 `scripts/wrap-client.ts`：客户端半必须以 `window.__ModuleLoader__.load({ id, factory })` 的形式到达浏览器，且 `id` 等于包名，这个信封由该脚本补上。
 
-`lib/` 是**特意提交进仓库**的。pnpm 默认不会运行 git 依赖的 `prepare` 脚本，除非使用者显式开 `allowBuilds`；提交构建产物才能让 `add` 直接从仓库装成功。`prepare` 同样会跑 `build`，保证本地 `npm install` 与 `npm publish` 时产物是最新的。
+`lib/` 是**特意提交进仓库**的，同时本包**刻意不声明任何生命周期脚本**。pnpm 默认拒绝安装带构建脚本的 git 依赖，除非使用者把它加进 `allowBuilds`，那会让插件无法直接从仓库安装；没有脚本要跑，`add` 就只会消费已提交的产物。改动 `src/` 之后请跑 `npm run build`。
 
 `verify` 并不是侧边栏的模拟。它捕获信封注册的 factory，用桩 context 驱动 `apply`，再用 `react-test-renderer` 渲染注册的组件——足以证明信封、注册与组件发布的样式表都是对的。指示器的位置与颜色，仍然只有在真正运行的侧边栏里才能判断。
 
