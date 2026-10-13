@@ -1,5 +1,7 @@
 # dsh-workspace-activity
 
+**English** · [简体中文](README.zh.md)
+
 Marks each workspace in the sidebar while one of its sessions is running.
 
 A session row already shows a spinner while it runs. This plugin puts the same
